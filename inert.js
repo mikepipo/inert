@@ -21,8 +21,10 @@ class InertWrapper {
       throw new Error('Missing required argument; InertWrapper needs to wrap an Element.');
     }
     this._root = root;
-    this.inert = true;
     this._savedNodes = [];
+
+    this._inert = true;
+    makeInert();
   }
 
   static get _focusableElementsString() {
@@ -53,8 +55,11 @@ class InertWrapper {
     return true;
   }
 
-  makeInert() {
-    InertWrapper.composedTreeWalk(this._root, { preorder: (node) => { makeNodeInert(node) } });
+  
+  makeInert(root) {
+    InertWrapper.composedTreeWalk(root, { preorder: (node) => { makeNodeInert(node) } });
+
+    // add mutation observer
   }
 
   makeNodeErt(nodeData) {
@@ -64,6 +69,13 @@ class InertWrapper {
     else
       node.removeAttribute('tabindex');
     return true;
+  }
+
+  makeErt() {
+    while (this._savedNodes.length > 0) {
+      var nodeData = this._savedNodes.shift();
+      makeNodeErt(nodeData);
+    }
   }
 
   set inert(isInert) {
@@ -76,25 +88,6 @@ class InertWrapper {
       makeInert();
     else
       makeNonInert();
-
-    this._focusableElements.forEach((child) => {
-      if (isInert) {
-        // If the child has an explict tabindex save it
-        if (child.hasAttribute('tabindex')) {
-          child.__savedTabIndex = child.tabIndex;
-        }
-        // Set ALL focusable children to tabindex -1
-        child.setAttribute('tabindex', -1);
-      } else {
-        // If the child has a saved tabindex, restore it
-        // Because the value could be 0, explicitly check that it's not false
-        if (child.__savedTabIndex === 0 || child.__savedTabIndex) {
-          return child.setAttribute('tabindex', child.__savedTabIndex);
-        } else {
-          // Remove tabindex from ANY REMAINING children
-          child.removeAttribute('tabindex');
-        }
-      }
     });
   }
 
