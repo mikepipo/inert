@@ -20,12 +20,14 @@ class InertRoot {
     this._inertManager = inertManager;
     this._rootElement = rootElement;
     this._rootElement.setAttribute('aria-hidden', 'true');
+    this._rootElement.__inertRoot = this;
+
     this._savedNodes = new Set([]);
 
     this._walkSubtree(this._rootElement);
 
     // mutation observer
-    this._observer = new MutationObserver(this._onChildAdded);
+    this._observer = new MutationObserver(this._onChildAdded.bind(this));
     this._observer.observe(this._rootElement, { childList: true, subtree: true });
   }
 
@@ -57,6 +59,14 @@ class InertRoot {
    * @param {Node} node
    */
   _visitNode(node) {
+    if (node.hasAttribute('inert')) {
+      let inertSubRoot = node.__inertRoot;
+      for (let savedInertNode of inertSubRoot._savedNodes) {
+        this._inertManager.register(savedInertNode.node, this);
+        this._savedNodes.add(savedInertNode);
+      }
+    }
+
     if (!node.matches(InertNode._focusableElementsString) && !node.hasAttribute('tabindex'))
       return;
 
@@ -164,7 +174,7 @@ class InertManager {
     this._inertRoots = new Set([]);
 
     var inertElements = Array.from(document.querySelectorAll('[inert]'));
-    for (let inertElement of Array.from(inertElements))
+    for (let inertElement of inertElements)
       this.setInert(inertElement, true);
   }
 
@@ -203,7 +213,7 @@ class InertManager {
     // TODO better way to associate nodeData with node?
     if (node.__inertNode) {
       inertNode = node.__inertNode;
-      inertNode.inertRoots.add(inertRoot);
+      inertNode._inertRoots.add(inertRoot);
     } else {
       inertNode = new InertNode(node, inertRoot);
     }
@@ -305,7 +315,7 @@ function watchForInert(records, self) {
   }
 }
 
-// Uncomment to allow watching for inert attribute changes
-// var observer = new MutationObserver(watchForInert);
-// observer.observe(document.body, { attributes: true, subtree: true });
+// Comment these two lines out to use programmatic API only
+var observer = new MutationObserver(watchForInert);
+observer.observe(document.body, { attributes: true, subtree: true });
 
