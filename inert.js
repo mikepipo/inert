@@ -66,8 +66,6 @@ class InertRoot {
    * This unwinds all of the state stored in this object and updates the state of all of the managed nodes.
    */
   destructor() {
-    console.log('destroying', this);
-    console.trace();
     this._observer.disconnect();
     delete this._observer;
 
