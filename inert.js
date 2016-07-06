@@ -16,6 +16,19 @@
  */
 
 (function(document) {
+
+/** @type {string} */
+const _focusableElementsString = ['a[href]',
+                                  'area[href]',
+                                  'input:not([disabled])',
+                                  'select:not([disabled])',
+                                  'textarea:not([disabled])',
+                                  'button:not([disabled])',
+                                  'iframe',
+                                  'object',
+                                  'embed',
+                                  '[contenteditable]'].join(',');
+
 /**
  * InertRoot manages a single inert subtree.
  */
@@ -102,11 +115,10 @@ class InertRoot {
       }
     }
 
-    if (!node.matches(InertNode._focusableElementsString) && !node.hasAttribute('tabindex'))
-      return;
-
-    let inertNode = this._inertManager.register(node, this);
-    this._managedNodes.add(inertNode);
+    if (node.matches(_focusableElementsString) || node.hasAttribute('tabindex')) {
+      let inertNode = this._inertManager.register(node, this);
+      this._managedNodes.add(inertNode);
+    }
   }
 
   /**
@@ -145,7 +157,7 @@ class InertNode {
     this._destroyed = false;
 
     // Make this node unfocusable
-    if (node.matches(InertNode._focusableElementsString)) {
+    if (node.matches(_focusableElementsString)) {
       if (node.hasAttribute('tabindex'))
         this._savedTabIndex = node.tabIndex;
       this._node.setAttribute('tabindex', '-1');
@@ -172,11 +184,6 @@ class InertNode {
     delete this._inertRoots;
 
     this._destroyed = true;
-  }
-
-  /** @type {string} */
-  static get _focusableElementsString() {
-    return 'a[href],area[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),iframe,object,embed,[contenteditable]';
   }
 
   /**
@@ -276,14 +283,14 @@ class InertManager {
    */
   setInert(root, inert) {
     if (inert) {
-      if (this._inertRoots.has(root))
+      if (this._inertRoots.has(root))   // element is already inert
         return;
 
       let inertRoot = new InertRoot(root, this);
       root.setAttribute('inert', '');
       this._inertRoots.set(root, inertRoot);
     } else {
-      if (!this._inertRoots.has(root))
+      if (!this._inertRoots.has(root))  // element is already non-inert
         return;
 
       let inertRoot = this._inertRoots.get(root);
@@ -307,7 +314,7 @@ class InertManager {
    */
   register(node, inertRoot) {
     let inertNode = this._managedNodes.get(node);
-    if (inertNode !== undefined)
+    if (inertNode !== undefined)  // node was already in an inert subtree
       inertNode.addInertRoot(inertRoot);
     else
       inertNode = new InertNode(node, inertRoot);
@@ -338,18 +345,15 @@ class InertManager {
    * @param {MutationObserver} self
    */
   _watchForInert(records, self) {
-    for (var record of records) {
-      if (record.type != 'attributes')
+    for (let record of records) {
+      if (record.type !== 'attributes' || record.attributeName !== 'inert')
         continue;
-      if (record.attributeName != 'inert')
-        continue;
-      var target = record.target;
-      var inert = target.hasAttribute('inert');
+      let target = record.target;
+      let inert = target.hasAttribute('inert');
       this.setInert(target, inert);
     }
   }
 }
-
 
  /**
   * Recursively walk the composed tree from |node|.
