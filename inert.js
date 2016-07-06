@@ -410,12 +410,8 @@ Object.defineProperty(Element.prototype, 'inert', {
 
 let style = document.createElement('style');
 style.textContent = "\n"+
-                    "[inert] [tabindex] {\n" +
-                    "  outline: 0;\n" +
-                    "  pointer-events: none;\n" +
-                    "}\n" +
-                    "\n" +
                     "[inert], [inert] * {\n" +
+                    "  pointer-events: none;\n" +
                     "  user-select: none;\n" +
                     "  -webkit-user-select: none;\n" +
                     "  -moz-user-select: none;\n" +
