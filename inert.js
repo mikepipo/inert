@@ -420,6 +420,7 @@ style.textContent = "\n"+
                     "  -webkit-user-select: none;\n" +
                     "  -moz-user-select: none;\n" +
                     "  -ms-user-select: none;\n" +
+                    "  cursor: default;\n"
                     "}\n";
 
 document.body.appendChild(style);
