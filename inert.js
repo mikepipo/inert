@@ -56,9 +56,13 @@ class InertRoot {
     // Make all focusable elements in the subtree unfocusable
     this._makeSubtreeUnfocusable(this._rootElement);
 
-    // Watch for any additions in the subtree and make them unfocusable too
-    this._observer = new MutationObserver(this._onChildAdded.bind(this));
-    this._observer.observe(this._rootElement, { childList: true, subtree: true });
+    // Watch for:
+    // - any additions in the subtree: make them unfocusable too
+    // - any removals from the subtree: remove them from this inert root's managed nodes
+    // - attribute changes: if `tabindex` is added, or removed from an intrinsically focusable element,
+    //   make that node a managed node.
+    this._observer = new MutationObserver(this._onMutation.bind(this));
+    this._observer.observe(this._rootElement, { attributes: true, childList: true, subtree: true });
   }
 
   /**
@@ -73,10 +77,9 @@ class InertRoot {
       this._rootElement.removeAttribute('aria-hidden');
     delete this._rootElement;
 
-    for (let inertNode of this._managedNodes) {
-      this._inertManager.deregister(inertNode, this);
-      this._managedNodes.delete(inertNode);
-    }
+    for (let inertNode of this._managedNodes)
+      this._unmanageNode(inertNode.node);
+
     delete this._managedNodes;
 
     delete this._inertManager;
@@ -93,7 +96,7 @@ class InertRoot {
    * @param {Node} startNode
    */
   _makeSubtreeUnfocusable(startNode) {
-    composedTreeWalk(startNode, (node) => { return this._visitNode(node); });
+    composedTreeWalk(startNode, (node) => { this._visitNode(node); });
   }
 
   /**
@@ -105,37 +108,92 @@ class InertRoot {
 
     // If a descendant inert root becomes un-inert, its descendants will still be inert because of this
     // inert root, so all of its managed nodes need to be adopted by this InertRoot.
-    if (node !== this._rootElement && node.hasAttribute('inert')) {
-      let inertSubRoot = this._inertManager.getInertRoot(node);
+    if (node !== this._rootElement && node.hasAttribute('inert'))
+      this._adoptInertRoot(node);
 
-      // During initialisation this inert root may not have been registered yet,
-      // so register it now if need be.
-      if (!inertSubRoot) {
-        this._inertManager.setInert(node, true);
-        inertSubRoot = this._inertManager.getInertRoot(node);
-      }
-
-      for (let savedInertNode of inertSubRoot.managedNodes) {
-        this._inertManager.register(savedInertNode.node, this);
-        this._managedNodes.add(savedInertNode);
-      }
-    }
-
-    if (node.matches(_focusableElementsString) || node.hasAttribute('tabindex')) {
-      let inertNode = this._inertManager.register(node, this);
-      this._managedNodes.add(inertNode);
-    }
+    if (node.matches(_focusableElementsString) || node.hasAttribute('tabindex'))
+      this._manageNode(node);
   }
 
   /**
-   * Callback used when mutation observer detects subtree additions.
+   * Register the given node with this InertRoot and with InertManager.
+   * @param {Node} node
+   */
+  _manageNode(node) {
+    const inertNode = this._inertManager.register(node, this);
+    this._managedNodes.add(inertNode);
+  }
+
+  /**
+   * Unregister the given node with this InertRoot and with InertManager.
+   * @param {Node} node
+   */
+  _unmanageNode(node) {
+    const inertNode = this._inertManager.deregister(node, this);
+    if (inertNode)
+      this._managedNodes.delete(inertNode);
+  }
+
+  /**
+   * Unregister the entire subtree starting at `startNode`.
+   * @param {Node} startNode
+   */
+  _unmanageSubtree(startNode) {
+    composedTreeWalk(startNode, (node) => { this._unmanageNode(node); });
+  }
+
+  /**
+   * If a descendant node is found with an `inert` attribute, adopt its managed nodes.
+   * @param {Node} node
+   */
+  _adoptInertRoot(node) {
+    let inertSubroot = this._inertManager.getInertRoot(node);
+
+    // During initialisation this inert root may not have been registered yet,
+    // so register it now if need be.
+    if (!inertSubroot) {
+      this._inertManager.setInert(node, true);
+      inertSubroot = this._inertManager.getInertRoot(node);
+    }
+
+    for (let savedInertNode of inertSubroot.managedNodes)
+      this._manageNode(savedInertNode.node);
+  }
+
+  /**
+   * Callback used when mutation observer detects subtree additions, removals, or attribute changes.
    * @param {MutationRecord} records
    * @param {MutationObserver} self
    */
-  _onChildAdded(records, self) {
+  _onMutation(records, self) {
     for (let record of records) {
-      for (let node of Array.from(record.addedNodes))
-        this._makeSubtreeUnfocusable(node);
+      const target = record.target;
+      if (record.type === 'childList') {
+        // Manage added nodes
+        for (let node of Array.from(record.addedNodes))
+          this._makeSubtreeUnfocusable(node);
+
+        // Un-manage removed nodes
+        for (let node of Array.from(record.removedNodes))
+          this._unmanageSubtree(node);
+      } else if (record.type === 'attributes') {
+        if (record.attributeName === 'tabindex') {
+          // Re-initialise inert node if tabindex changes
+          this._manageNode(target);
+        } else if (target !== this._rootElement &&
+                   record.attributeName === 'inert' &&
+                   target.hasAttribute('inert')) {
+          console.log('new inert root added in existing inert tree, adopt managed nodes');
+          // If a new inert root is added, adopt its managed nodes and make sure it knows about the
+          // already managed nodes from this inert subroot.
+          this._adoptInertRoot(target);
+          let inertSubroot = this._inertManager.getInertRoot(target);
+          for (let managedNode of this._managedNodes) {
+            if (inertSubroot.contains(managedNode.node))
+              inertSubroot._manageNode(managedNode.node);
+          }
+        }
+      }
     }
   }
 }
@@ -162,15 +220,8 @@ class InertNode {
     /** @type {boolean} */
     this._destroyed = false;
 
-    // Make this node unfocusable
-    if (node.matches(_focusableElementsString)) {
-      if (node.hasAttribute('tabindex'))
-        this._savedTabIndex = node.tabIndex;
-      this._node.setAttribute('tabindex', '-1');
-    } else if (node.hasAttribute('tabindex')) {
-      this._savedTabIndex = node.tabIndex;
-      this._node.removeAttribute('tabindex');
-    }
+    // Save any prior tabindex info and make this node untabbable
+    this.ensureUntabbable();
   }
 
   /**
@@ -221,6 +272,22 @@ class InertNode {
   get savedTabIndex() {
     this._throwIfDestroyed();
     return this._savedTabIndex;
+  }
+
+  /** Save the existing tabindex value and make the node untabbable */
+  ensureUntabbable() {
+    const node = this.node;
+    if (node.matches(_focusableElementsString)) {
+      if (node.tabIndex === -1)
+        return;
+
+      if (node.hasAttribute('tabindex'))
+        this._savedTabIndex = node.tabIndex;
+      node.setAttribute('tabindex', '-1');
+    } else if (node.hasAttribute('tabindex')) {
+      this._savedTabIndex = node.tabIndex;
+      node.removeAttribute('tabindex');
+    }
   }
 
   /**
@@ -320,10 +387,13 @@ class InertManager {
    */
   register(node, inertRoot) {
     let inertNode = this._managedNodes.get(node);
-    if (inertNode !== undefined)  // node was already in an inert subtree
+    if (inertNode !== undefined) {  // node was already in an inert subtree
       inertNode.addInertRoot(inertRoot);
-    else
+      // Update saved tabindex value if necessary
+      inertNode.ensureUntabbable();
+    } else {
       inertNode = new InertNode(node, inertRoot);
+    }
 
     this._managedNodes.set(node, inertNode);
 
@@ -331,17 +401,24 @@ class InertManager {
   }
 
   /**
-   * De-register the given InertRoot as managing the given InertNode.
+   * De-register the given InertRoot as managing the given inert node.
    * Removes the inert root from the InertNode's set of managing inert roots, and remove the inert
    * node from the InertManager's set of managed nodes if it is destroyed.
-   * @param {InertNode} inertNode
+   * If the node is not currently managed, this is essentially a no-op.
+   * @param {Node} node
    * @param {InertRoot} inertRoot
+   * @return {InertNode?} The potentially destroyed InertNode associated with this node, if any.
    */
-  deregister(inertNode, inertRoot) {
-    let node = inertNode.node;
+  deregister(node, inertRoot) {
+    const inertNode = this._managedNodes.get(node);
+    if (!inertNode)
+      return null;
+
     inertNode.removeInertRoot(inertRoot);
     if (inertNode.destroyed)
       this._managedNodes.delete(node);
+
+    return inertNode;
   }
 
 
@@ -418,13 +495,16 @@ Object.defineProperty(Element.prototype, 'inert', {
 
 let style = document.createElement('style');
 style.textContent = "\n"+
-                    "[inert], [inert] * {\n" +
+                    "[inert] {\n" +
                     "  pointer-events: none;\n" +
+                    "  cursor: default;\n" +
+                    "}\n" +
+                    "\n" +
+                    "[inert], [inert] * {\n" +
                     "  user-select: none;\n" +
                     "  -webkit-user-select: none;\n" +
                     "  -moz-user-select: none;\n" +
                     "  -ms-user-select: none;\n" +
-                    "  cursor: default;\n"
                     "}\n";
 
 document.body.appendChild(style);
