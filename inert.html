@@ -41,6 +41,11 @@ limitations under the License.
       opacity: 0.5;
     }
 
+    [tabindex="-1"]:before {
+      content: "[-1] ";
+      font-size: xx-small;
+    }
+
     .not {
       display: none;
     }
@@ -56,6 +61,7 @@ limitations under the License.
     [inert] [inert] .inner-not {
       display: none;
     }
+
     </style>
   </head>
   <body>

@@ -189,7 +189,7 @@ class InertRoot {
           this._adoptInertRoot(target);
           let inertSubroot = this._inertManager.getInertRoot(target);
           for (let managedNode of this._managedNodes) {
-            if (inertSubroot.contains(managedNode.node))
+            if (target.contains(managedNode.node))
               inertSubroot._manageNode(managedNode.node);
           }
         }
