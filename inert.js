@@ -374,7 +374,7 @@ class InertManager {
 
     // Comment these two lines out to use programmatic API only
     this._observer = new MutationObserver(this._watchForInert.bind(this));
-    this._observer.observe(document.body, { attributes: true, subtree: true });
+    this._observer.observe(document.body, { attributes: true, subtree: true, childList: true });
   }
 
   /**
@@ -401,6 +401,11 @@ class InertManager {
     }
   }
 
+  /**
+   * Get the InertRoot object corresponding to the given inert root element, if any.
+   * @param {Element} element
+   * @return {InertRoot?}
+   */
   getInertRoot(element) {
     return this._inertRoots.get(element);
   }
@@ -457,11 +462,26 @@ class InertManager {
    */
   _watchForInert(records, self) {
     for (let record of records) {
-      if (record.type !== 'attributes' || record.attributeName !== 'inert')
-        continue;
-      let target = record.target;
-      let inert = target.hasAttribute('inert');
-      this.setInert(target, inert);
+      switch (record.type) {
+      case 'childList':
+        for (let node of Array.from(record.addedNodes)) {
+          if (node.nodeType !== Node.ELEMENT_NODE)
+            continue;
+          let inertElements = Array.from(node.querySelectorAll('[inert]'));
+          if (node.matches('[inert]'))
+            inertElements.unshift(node);
+          for (let inertElement of inertElements)
+            this.setInert(inertElement, true);
+        }
+        break;
+      case 'attributes':
+        if (record.attributeName !== 'inert')
+          continue;
+        let target = record.target;
+        let inert = target.hasAttribute('inert');
+        this.setInert(target, inert);
+        break;
+      }
     }
   }
 }
