@@ -30,7 +30,20 @@ const _focusableElementsString = ['a[href]',
                                   '[contenteditable]'].join(',');
 
 /**
- * InertRoot manages a single inert subtree.
+ * `InertRoot` manages a single inert subtree, i.e. a DOM subtree whose root element has an `inert`
+ * attribute.
+ *
+ * Its main functions are:
+ *
+ * - to create and maintain a set of managed `InertNode`s, including when mutations occur in the
+ *   subtree. The `makeSubtreeUnfocusable()` method handles collecting `InertNode`s via registering
+ *   each focusable node in the subtree with the singleton `InertManager` which manages all known
+ *   focusable nodes within inert subtrees. `InertManager` ensures that a single `InertNode`
+ *   instance exists for each focusable node which has at least one inert root as an ancestor.
+ *
+ * - to notify all managed `InertNode`s when this subtree stops being inert (i.e. when the `inert`
+ *   attribute is removed from the root node). This is handled in the destructor, which calls the
+ *   `deregister` method on `InertManager` for each managed inert node.
  */
 class InertRoot {
   /**
@@ -53,7 +66,7 @@ class InertRoot {
     // Make the subtree hidden from assistive technology
     this._rootElement.setAttribute('aria-hidden', 'true');
 
-    // Make all focusable elements in the subtree unfocusable
+    // Make all focusable elements in the subtree unfocusable and add them to _managedNodes
     this._makeSubtreeUnfocusable(this._rootElement);
 
     // Watch for:
@@ -66,8 +79,8 @@ class InertRoot {
   }
 
   /**
-   * Call this whenever this object is about to become obsolete.
-   * This unwinds all of the state stored in this object and updates the state of all of the managed nodes.
+   * Call this whenever this object is about to become obsolete.  This unwinds all of the state
+   * stored in this object and updates the state of all of the managed nodes.
    */
   destructor() {
     this._observer.disconnect();
@@ -183,7 +196,6 @@ class InertRoot {
         } else if (target !== this._rootElement &&
                    record.attributeName === 'inert' &&
                    target.hasAttribute('inert')) {
-          console.log('new inert root added in existing inert tree, adopt managed nodes');
           // If a new inert root is added, adopt its managed nodes and make sure it knows about the
           // already managed nodes from this inert subroot.
           this._adoptInertRoot(target);
@@ -199,8 +211,18 @@ class InertRoot {
 }
 
 /**
- * InertNode initialises and manages a single inert node.
+ * `InertNode` initialises and manages a single inert node.
  * A node is inert if it is a descendant of one or more inert root elements.
+ *
+ * On construction, `InertNode` saves the existing `tabindex` value for the node, if any, and
+ * either removes the `tabindex` attribute or sets it to `-1`, depending on whether the element
+ * is intrinsically focusable or not.
+ *
+ * `InertNode` maintains a set of `InertRoot`s which are descendants of this `InertNode`. When an
+ * `InertRoot` is destroyed, and calls `InertManager.deregister()`, the `InertManager` notifies the
+ * `InertNode` via `removeInertRoot()`, which in turn destroys the `InertNode` if no `InertRoot`s
+ * remain in the set. On destruction, `InertNode` reinstates the stored `tabindex` if one exists,
+ * or removes the `tabindex` attribute if the element is intrinsically focusable.
  */
 class InertNode {
   /**
@@ -315,6 +337,12 @@ class InertNode {
 
 /**
  * InertManager is a per-document singleton object which manages all inert roots and nodes.
+ *
+ * When an element becomes an inert root by having an `inert` attribute set and/or its `inert`
+ * property set to `true`, the `setInert` method creates an `InertRoot` object for the element.
+ * The `InertRoot` in turn registers itself as managing all of the element's focusable descendant
+ * nodes via the `register()` method. The `InertManager` ensures that a single `InertNode` instance
+ * is created for each such node, via the `_managedNodes` map.
  */
 class InertManager {
   /**
