@@ -233,6 +233,9 @@ class InertNode {
     /** @type {Node} */
     this._node = node;
 
+    /** @type {boolean} */
+    this._overrodeFocusMethod = false;
+
     /**
      * @type {Set<InertRoot>} The set of descendant inert roots.
      *    If and only if this set becomes empty, this node is no longer inert.
@@ -258,6 +261,9 @@ class InertNode {
         this._node.setAttribute('tabindex', this.savedTabIndex);
       else
         this._node.removeAttribute('tabindex');
+
+      if (this._overrodeFocusMethod)
+        delete this._node.focus;
     }
     delete this._node;
     delete this._inertRoots;
@@ -296,9 +302,10 @@ class InertNode {
     return this._savedTabIndex;
   }
 
-  /** Save the existing tabindex value and make the node untabbable */
+  /** Save the existing tabindex value and make the node untabbable and unfocusable */
   ensureUntabbable() {
     const node = this.node;
+    node.blur();  // TODO(alice): is this right?
     if (node.matches(_focusableElementsString)) {
       if (node.tabIndex === -1)
         return;
@@ -306,6 +313,10 @@ class InertNode {
       if (node.hasAttribute('tabindex'))
         this._savedTabIndex = node.tabIndex;
       node.setAttribute('tabindex', '-1');
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        node.focus = function() {};
+        this._overrodeFocusMethod = true;
+      }
     } else if (node.hasAttribute('tabindex')) {
       this._savedTabIndex = node.tabIndex;
       node.removeAttribute('tabindex');
