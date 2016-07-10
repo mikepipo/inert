@@ -18,7 +18,7 @@
 const expect = chai.expect;
 const fixture = new Fixture();
 
-describe('Inert', function() {
+describe('Basic', function() {
 
   describe('Element.prototype', function() {
     it('should patch the Element prototype', function() {
@@ -26,7 +26,7 @@ describe('Inert', function() {
     });
   });
 
-  describe('children of inert parent', function() {
+  describe('children of declaratively inert parent', function() {
     beforeEach(function(done) {
       fixture.load('fixtures/basic.html', done);
     });
@@ -39,6 +39,14 @@ describe('Inert', function() {
       const button = document.querySelector('#fixture button');
       expect(button.tabIndex).to.equal(-1);
     });
+
+    it('should make explicitly focusable child not focusable', function() {
+      const div = document.querySelector('#fake-button');
+      expect(div.tabIndex).to.equal(-1);
+      expect(div.hasAttribute('tabindex')).to.not.be.ok();
+    });
+
   });
 
 });
+
