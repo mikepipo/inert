@@ -99,6 +99,7 @@ describe('Basic', function() {
       newButton.textContent = 'Click me too';
       const inertContainer = document.querySelector('[inert]');
       inertContainer.appendChild(newButton);
+      // Wait for the next microtask to allow mutation observers to react to the DOM change
       Promise.resolve().then(() => {
         expect(isUnfocusable(newButton)).to.equal(true);
         done();
@@ -112,6 +113,7 @@ describe('Basic', function() {
       expect(temp.parentElement).to.eql(fixture);
       temp.outerHTML = '<div id="inert2" inert><button>Click me</button></div>';
       const div = fixture.querySelector('#inert2');
+      // Wait for the next microtask to allow mutation observers to react to the DOM change
       Promise.resolve().then(() => {
         expect(div.inert).to.equal(true);
         const button = div.querySelector('button');
@@ -189,7 +191,47 @@ describe('Basic', function() {
         done();
       });
     });
+  });
 
+  describe('reapply existing tabindex', function() {
+    beforeEach(function(done) {
+      fixture.load('fixtures/tabindex.html', done);
+    });
+
+    afterEach(function() {
+      fixture.destroy();
+    });
+
+    it('should reinstate pre-existing tabindex on setting inert=false', function() {
+      const container = document.querySelector('#container');
+      const tabindexes = new Map();
+      const focusableElements = new Set();
+      for (let el of Array.from(container.children)) {
+        if (el.hasAttribute('tabindex'))
+          tabindexes.set(el, el.getAttribute('tabindex'));
+        if (!isUnfocusable(el))
+          focusableElements.add(el);
+      }
+
+      container.inert = true;
+      for (let focusableEl of focusableElements)
+        expect(isUnfocusable(focusableEl)).to.equal(true);
+
+      container.inert = false;
+      for (let focusableEl of focusableElements)
+        expect(isUnfocusable(focusableEl)).to.equal(false);
+
+      for (let el of Array.from(container.children)) {
+        let tabindex = tabindexes.get(el)
+        if (tabindex) {
+          expect(el.hasAttribute('tabindex')).to.equal(true);
+          expect(el.getAttribute('tabindex')).to.equal(tabindexes.get(el));
+        } else {
+          expect(el.hasAttribute('tabindex')).to.equal(false);
+        }
+      }
+
+    });
   });
 });
 
