@@ -37,13 +37,14 @@ const _focusableElementsString = ['a[href]',
  *
  * - to create and maintain a set of managed `InertNode`s, including when mutations occur in the
  *   subtree. The `makeSubtreeUnfocusable()` method handles collecting `InertNode`s via registering
- *   each focusable node in the subtree with the singleton `InertManager` which manages all known
- *   focusable nodes within inert subtrees. `InertManager` ensures that a single `InertNode`
- *   instance exists for each focusable node which has at least one inert root as an ancestor.
+ *   each focusable node in the `_managedNodes` map. Each `InertNode` is associated with a single
+ *   `InertRoot`, so any nodes which are descendants of another inert root node are managed by that
+ *   node's `InertRoot` instance.
  *
  * - to notify all managed `InertNode`s when this subtree stops being inert (i.e. when the `inert`
- *   attribute is removed from the root node). This is handled in the destructor, which calls the
- *   `deregister` method on `InertManager` for each managed inert node.
+ *   attribute is removed from the root node). This is handled in the destructor, which either
+ *   passes all managed `InertNodes` to the nearest ancestor `InertRoot`, or else destroys the
+ *   `InertNode` instances, restoring full interactivity to the associated element.
  */
 class InertRoot {
   /**
@@ -58,10 +59,10 @@ class InertRoot {
     this._rootElement = rootElement;
 
     /**
-     * @type {Set<Node>}
+     * @type {Map<Node, InertNode>}
      * All managed focusable nodes in this InertRoot's subtree.
      */
-    this._managedNodes = new Set([]);
+    this._managedNodes = new Map();
 
     // Make the subtree hidden from assistive technology
     this._rootElement.setAttribute('aria-hidden', 'true');
@@ -83,6 +84,20 @@ class InertRoot {
    * stored in this object and updates the state of all of the managed nodes.
    */
   destructor() {
+    // Walk up tree to determine next closest inert root, have it adopt all managed nodes
+    for (let ancestor = this.parentElement; ancestor = ancestor.parentElement; ancestor !== null) {
+      if (!ancestor.hasAttribute('inert'))
+        continue;
+
+      let inertRoot = this._inertManager.getInertRoot(ancestor);
+      // If the ancestor inert root hasn't been initialised, initialise it now
+      if (!inertRoot) {
+        this._inertManager.setInert(ancestor, true);
+        inertRoot = this._inertManager.getInertRoot(ancestor);
+      }
+
+      inertRoot._adoptInertSubtree(this);
+    }
     this._observer.disconnect();
     delete this._observer;
 
@@ -90,8 +105,8 @@ class InertRoot {
       this._rootElement.removeAttribute('aria-hidden');
     delete this._rootElement;
 
-    for (let inertNode of this._managedNodes)
-      this._unmanageNode(inertNode.node);
+    for (let node of this._managedNodes.keys)
+      this._unmanageNode(node);
 
     delete this._managedNodes;
 
@@ -102,7 +117,7 @@ class InertRoot {
    * @return {Set<InertNode>} A copy of this InertRoot's managed nodes set.
    */
   get managedNodes() {
-    return new Set(this._managedNodes);
+    return new Map(this._managedNodes);
   }
 
   /**
@@ -119,32 +134,33 @@ class InertRoot {
     if (node.nodeType !== Node.ELEMENT_NODE)
       return;
 
-    // If a descendant inert root becomes un-inert, its descendants will still be inert because of this
-    // inert root, so all of its managed nodes need to be adopted by this InertRoot.
+    // Descendant inert root manages its own nodes
     if (node !== this._rootElement && node.hasAttribute('inert'))
-      this._adoptInertRoot(node);
+      return;
 
     if (node.matches(_focusableElementsString) || node.hasAttribute('tabindex'))
       this._manageNode(node);
   }
 
   /**
-   * Register the given node with this InertRoot and with InertManager.
+   * Register the given node with this InertRoot and make it inert.
    * @param {Node} node
    */
   _manageNode(node) {
-    const inertNode = this._inertManager.register(node, this);
-    this._managedNodes.add(inertNode);
+    const inertNode = new InertNode(node);
+    this._managedNodes.set(node, inertNode);
   }
 
   /**
-   * Unregister the given node with this InertRoot and with InertManager.
+   * Mark the given Node as no longer in an inert subtree.
    * @param {Node} node
    */
   _unmanageNode(node) {
-    const inertNode = this._inertManager.deregister(node, this);
-    if (inertNode)
+    const inertNode = this._managedNodes.get(node);
+    if (inertNode) {
+      inertNode.destructor()
       this._managedNodes.delete(inertNode);
+    }
   }
 
   /**
@@ -156,20 +172,11 @@ class InertRoot {
   }
 
   /**
-   * If a descendant node is found with an `inert` attribute, adopt its managed nodes.
-   * @param {Node} node
+   * If a descendant inertRoot is being destroyed, adopt its managed nodes.
+   * @param {InertRoot} inertRoot
    */
-  _adoptInertRoot(node) {
-    let inertSubroot = this._inertManager.getInertRoot(node);
-
-    // During initialisation this inert root may not have been registered yet,
-    // so register it now if need be.
-    if (!inertSubroot) {
-      this._inertManager.setInert(node, true);
-      inertSubroot = this._inertManager.getInertRoot(node);
-    }
-
-    for (let savedInertNode of inertSubroot.managedNodes)
+  _adoptInertSubtree(inertRoot) {
+    for (let savedInertNode of inertRoot.managedNodes)
       this._manageNode(savedInertNode.node);
   }
 
@@ -216,13 +223,12 @@ class InertRoot {
  *
  * On construction, `InertNode` saves the existing `tabindex` value for the node, if any, and
  * either removes the `tabindex` attribute or sets it to `-1`, depending on whether the element
- * is intrinsically focusable or not.
+ * is intrinsically focusable or not. Additionally, if the element is intrinsically focusable,
+ * `InertNode` creates a local `focus()` no-op method.
  *
- * `InertNode` maintains a set of `InertRoot`s which are descendants of this `InertNode`. When an
- * `InertRoot` is destroyed, and calls `InertManager.deregister()`, the `InertManager` notifies the
- * `InertNode` via `removeInertRoot()`, which in turn destroys the `InertNode` if no `InertRoot`s
- * remain in the set. On destruction, `InertNode` reinstates the stored `tabindex` if one exists,
- * or removes the `tabindex` attribute if the element is intrinsically focusable.
+ * On destruction, `InertNode` reinstates the stored `tabindex` if one exists, or removes the
+ * `tabindex` attribute if the element is intrinsically focusable. If a local `focus()` method was
+ * applied, it is removed.
  */
 class InertNode {
   /**
@@ -235,12 +241,6 @@ class InertNode {
 
     /** @type {boolean} */
     this._overrodeFocusMethod = false;
-
-    /**
-     * @type {Set<InertRoot>} The set of descendant inert roots.
-     *    If and only if this set becomes empty, this node is no longer inert.
-     */
-    this._inertRoots = new Set([inertRoot]);
 
     /** @type {boolean} */
     this._destroyed = false;
@@ -266,7 +266,6 @@ class InertNode {
         delete this._node.focus;
     }
     delete this._node;
-    delete this._inertRoots;
 
     this._destroyed = true;
   }
@@ -326,28 +325,6 @@ class InertNode {
       this._savedTabIndex = node.tabIndex;
       node.removeAttribute('tabindex');
     }
-  }
-
-  /**
-   * Add another inert root to this inert node's set of managing inert roots.
-   * @param {InertRoot} inertRoot
-   */
-  addInertRoot(inertRoot) {
-    this._throwIfDestroyed();
-    this._inertRoots.add(inertRoot);
-  }
-
-  /**
-   * Remove the given inert root from this inert node's set of managing inert roots.
-   * If the set of managing inert roots becomes empty, this node is no longer inert,
-   * so the object should be destroyed.
-   * @param {InertRoot} inertRoot
-   */
-  removeInertRoot(inertRoot) {
-    this._throwIfDestroyed();
-    this._inertRoots.delete(inertRoot);
-    if (this._inertRoots.size === 0)
-      this.destructor();
   }
 }
 
@@ -425,51 +402,6 @@ class InertManager {
   getInertRoot(element) {
     return this._inertRoots.get(element);
   }
-
-  /**
-   * Register the given InertRoot as managing the given node.
-   * In the case where the node has a previously existing inert root, this inert root will
-   * be added to its set of inert roots.
-   * @param {Node} node
-   * @param {InertRoot} inertRoot
-   * @return {InertNode} inertNode
-   */
-  register(node, inertRoot) {
-    let inertNode = this._managedNodes.get(node);
-    if (inertNode !== undefined) {  // node was already in an inert subtree
-      inertNode.addInertRoot(inertRoot);
-      // Update saved tabindex value if necessary
-      inertNode.ensureUntabbable();
-    } else {
-      inertNode = new InertNode(node, inertRoot);
-    }
-
-    this._managedNodes.set(node, inertNode);
-
-    return inertNode;
-  }
-
-  /**
-   * De-register the given InertRoot as managing the given inert node.
-   * Removes the inert root from the InertNode's set of managing inert roots, and remove the inert
-   * node from the InertManager's set of managed nodes if it is destroyed.
-   * If the node is not currently managed, this is essentially a no-op.
-   * @param {Node} node
-   * @param {InertRoot} inertRoot
-   * @return {InertNode?} The potentially destroyed InertNode associated with this node, if any.
-   */
-  deregister(node, inertRoot) {
-    const inertNode = this._managedNodes.get(node);
-    if (!inertNode)
-      return null;
-
-    inertNode.removeInertRoot(inertRoot);
-    if (inertNode.destroyed)
-      this._managedNodes.delete(node);
-
-    return inertNode;
-  }
-
 
   /**
    * Callback used when mutation observer detects attribute changes.
